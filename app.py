@@ -1,10 +1,5 @@
 import streamlit as st
 
-# ChromaDB monkey patching, remove when fixed and uncomment to run locally
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 from process_document import upload_file, cleanup
 from embed_and_retrieve import create_query_engine, validate_api_key, get_logger
 

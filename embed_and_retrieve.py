@@ -1,7 +1,9 @@
 import streamlit as st
+import os
 
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, ServiceContext
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core.settings import Settings
 from llama_index.core.storage.storage_context import StorageContext
 
 from llama_index.llms.openai import OpenAI
@@ -10,6 +12,7 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 import openai
 from huggingface_hub.utils import HfHubHTTPError
 from openai import OpenAIError
@@ -26,6 +29,8 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s : %(message)s
 
 def get_logger():
     return logger
+
+CHROMA_DIR = "chroma_db"
 
 def validate_api_key(provider, api_key):
     if provider == "OpenAI":
@@ -53,21 +58,35 @@ def validate_api_key(provider, api_key):
 def create_query_engine(file_path, provider, api_key, download_llm=False):
     # Set up the embedding and inference models
     if provider == "OpenAI":
-        embed_model = OpenAIEmbedding(model="text-embedding-3-small", api_key=api_key)
-        llm = OpenAI(model="gpt-4o-mini", api_key=api_key)
+        Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small",api_key=api_key)
+        Settings.llm = OpenAI(model="gpt-4o-mini", api_key=api_key)
     else:
-        embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2", token=api_key)
-        llm = HuggingFaceInferenceAPI(model_name="meta-llama/Meta-Llama-3-8B-Instruct", token=api_key)
+        Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2", token=api_key)
+        Settings.llm = HuggingFaceInferenceAPI(model_name="meta-llama/Meta-Llama-3-8B-Instruct", token=api_key)
 
-    
     documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
 
     # Set up the vector store (ChromaDB)
-    chroma_client = chromadb.Client()
+    db_path = CHROMA_DIR
+    if not os.path.exists(db_path):
+        os.makedirs(db_path)
+
+    # Initialize ChromaDB with settings for concurrent access
+    chroma_settings = ChromaSettings(
+        is_persistent=True,
+        persist_directory=db_path,
+        anonymized_telemetry=False
+    )
+    
+    chroma_client = chromadb.PersistentClient(
+        path=db_path,
+        settings=chroma_settings
+    )
+
     collection_name = "document_collection"
     try:
         chroma_collection = chroma_client.create_collection(collection_name)      
-    except (ValueError, chromadb.db.base.UniqueConstraintError, chromadb.errors.ChromaError) as e:
+    except (ValueError, chromadb.errors.UniqueConstraintError, chromadb.errors.ChromaError) as e:
         logger.warning(f"{e}: Collection already exists. Deleting and creating a new collection.")
         chroma_client.delete_collection(collection_name)
         chroma_collection = chroma_client.create_collection(collection_name)
@@ -76,12 +95,11 @@ def create_query_engine(file_path, provider, api_key, download_llm=False):
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
     # Create vector store index
-    service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
-    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context, service_context=service_context)
+    index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
 
     # Create and return query engine (attempt streaming support)
     try:
-        query_engine = index.as_query_engine(streaming=True, service_context=service_context)
+        query_engine = index.as_query_engine(streaming=True)
         response = query_engine.query("What is the document about?")
         for text in response.response_gen:
             if text is not None:
@@ -89,7 +107,7 @@ def create_query_engine(file_path, provider, api_key, download_llm=False):
     except NotImplementedError as e:
         logger.warning(f"{e}: Streaming not supported. Creating query engine without streaming.")
         try:
-            query_engine = index.as_query_engine(service_context=service_context)
+            query_engine = index.as_query_engine()
             response = query_engine.query("What is the document about?")
         except HfHubHTTPError as e:
             logger.error(f"{e}: Most likely the rate limits of the HuggingFace API have been exceeded.")
