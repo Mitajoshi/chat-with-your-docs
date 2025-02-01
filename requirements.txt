@@ -1,6 +1,8 @@
 chromadb==0.6.3
 llama_index==0.12.15
 llama-index-vector-stores-chroma==0.4.1
+# Monkey patching for Streamlit (cloud) server
+pysqlite3-binary
 
 
 # HuggingFace
@@ -14,5 +16,6 @@ transformers==4.48.2
 llama-index-embeddings-openai==0.3.1
 llama-index-llms-openai==0.3.15
 openai==1.61.0
+
 requests==2.32.3
 streamlit==1.41.1
